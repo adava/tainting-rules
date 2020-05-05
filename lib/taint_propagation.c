@@ -28,6 +28,7 @@ uint64_t rotate_op(uint64_t n, uint64_t c, shift_op op){
 shadow_err SHD_clear(shad_inq *src){
     SHD_value zero = 0;
     SHD_set_shadow(src,&zero);
+    return 0;
 }
 
 shadow_err SHD_copy(shad_inq src, shad_inq *dst){
@@ -83,6 +84,7 @@ shadow_err SHD_extensionL(shad_inq src, shad_inq *dst){
     SHD_value s_val = SHD_get_shadow(src);
     SHD_value res = RULE_LEFT(s_val);
     SHD_set_shadow(dst,&res);
+    return 0;
 }
 
 shadow_err SHD_exchange(shad_inq *src, shad_inq *dst){
@@ -93,15 +95,25 @@ shadow_err SHD_exchange(shad_inq *src, shad_inq *dst){
     return r1 | r2;
 }
 
-shadow_err SHD_and_or(shad_inq src, shad_inq *dst, guest_memory_read_func mem_read, logical_op op){
-    uint8_t buf[SHD_SIZE_MAX] = {0};
-    mem_read(src.addr.vaddr,buf,src.size);
-    uint64_t op1_v = convert_value(buf,src.size);
-    memset(buf,SHD_SIZE_MAX,0);
-    mem_read(dst->addr.vaddr,buf,dst->size);
-    uint64_t op2_v = convert_value(buf,dst->size);
-    SHD_value sh_src = SHD_get_shadow(src);
-    SHD_value sh_dst = SHD_get_shadow(*dst);
+shadow_err SHD_and_or(shad_inq src, shad_inq *dst, uint8_t *src_val, uint8_t *dst_val, logical_op op){
+    SHD_value sh_src, sh_dst;
+    uint64_t op1_v, op2_v;
+    if(src.type==IMMEDIATE){
+        sh_src = 0;
+        op1_v = src.addr.vaddr;
+    }
+    else{
+        op1_v = convert_value(src_val,src.size);
+        sh_src = SHD_get_shadow(src);
+    }
+    if(src.type==IMMEDIATE){
+        sh_dst = 0;
+        op2_v = dst->addr.vaddr;
+    }
+    else{
+        op2_v = convert_value(dst_val,dst->size);
+        sh_dst = SHD_get_shadow(*dst);
+    }
     SHD_value res = 0;
     switch (op){
         case OP_AND:
@@ -111,31 +123,34 @@ shadow_err SHD_and_or(shad_inq src, shad_inq *dst, guest_memory_read_func mem_re
             res = RULE_AND_OR(op1_v, sh_src, op2_v, sh_dst, RULE_IMPROVE_OR);
             break;
         default:
+            printf("OP_AND=%d, OP_AND=%d, op=%d\n",OP_AND,OP_OR,op);
             assert(0);
     }
     shadow_err r = SHD_set_shadow(dst,&res);
     return r;
 }
 
-shadow_err SHD_Shift_Rotation(shad_inq *dst, shad_inq src, shift_op op){
+shadow_err SHD_Shift_Rotation(shad_inq src, shad_inq *dst, shift_op op){
     SHD_value d_val, s_val, shift_res;
     d_val = SHD_get_shadow(*dst);
-    if (src.type==IMMEDIATE){
-        s_val = SHD_cast(&src.addr,src.size,&s_val,dst->size);
-    }
-    else{
+    s_val = 0;
+    if (src.type!=IMMEDIATE){
         SHD_value temp1= SHD_get_shadow(src);
-        s_val = 0;
         SHD_cast(&temp1,src.size,&s_val,dst->size);
     }
-
     switch (op){
         case Shr:
-            shift_res = d_val >> src.addr.vaddr;
+            shift_res = d_val > src.addr.vaddr;
             break;
         case Shl:
-            shift_res = d_val << src.addr.vaddr;
+            shift_res = d_val < src.addr.vaddr;
             break;
+        case Sar:
+            shift_res = d_val >> src.addr.vaddr;
+            break;
+//        case Sal: //not included in memcheck shift rules
+//            shift_res = d_val << src.addr.vaddr;
+//            break;
         case Ror:
         case Rol:
             shift_res = rotate_op(d_val,src.addr.vaddr,op);
@@ -156,3 +171,23 @@ shadow_err SHD_copy_conservative(shad_inq src, shad_inq *dst){
     return 0;
 }
 
+shadow_err SHD_write_contiguous(uint64_t vaddr, uint32_t size, uint8_t value){
+    uint64_t page_id = (vaddr & ~OFFSET_MASK);
+    printf("page_id=%llx\n",page_id);
+    uint64_t new_addr = vaddr;
+    uint32_t written_bytes = 0;
+    while(vaddr + size > page_id + PAGE_SIZE){
+        uint32_t new_size = (page_id + PAGE_SIZE - new_addr);
+        shadow_err res = write_memory_shadow(new_addr,new_size,value);
+        if (res!=0){
+            return res;
+        }
+        written_bytes+=new_size;
+        new_addr = new_addr + new_size;
+        page_id = (new_addr & ~OFFSET_MASK);
+    }
+    if (written_bytes!=size){
+        return write_memory_shadow(written_bytes+vaddr,size-written_bytes,value);
+    }
+    return 0;
+}

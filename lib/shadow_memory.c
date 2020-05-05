@@ -22,14 +22,16 @@ shadow_err set_global_shadow(int id, uint8_t size, void *value);
 
 shadow_err set_temp_shadow(int *id, uint8_t size, void *value); //would return the inserted id
 
+void SHD_initialize_globals(void);
+
 guint SHD_ghash_addr(gconstpointer key){
     uint64_t h = (uint64_t)key;
     h = SHD_find_page_addr(h);
-//    printf("in SHD_ghash_addr, h=%llx\n",h);
+//  printf("in SHD_ghash_addr, key=%llx, h=%llx\n",(uint64_t)key,h);
     return ((guint)h);
 }
 
-static uint64_t inline convert_value(void *value, uint8_t size){
+static inline uint64_t convert_value(void *value, uint8_t size){
     SHD_value temp;
     switch(size){ //dereference value argument based on the passed value size (read based on size but assign to SHD_value)
         case 1:
@@ -45,21 +47,21 @@ static uint64_t inline convert_value(void *value, uint8_t size){
             temp = (SHD_value)(*(uint64_t*)value);
             break;
         default:
-            printf("unknown size for conversion!");
-            exit(1);
+            printf("unknown size for conversion!\n");
+            assert(0);
             break;
     }
     return temp;
 }
 
-void SHD_initialize_globals(){
+void SHD_initialize_globals(void){
     for(int i=0;i<GLOBAL_POOL_SIZE;i++){
         SHD_value *shadow = g_new0(SHD_value,1); //would initialize to zero
         g_ptr_array_add(SHD_Memory.global_temps,shadow);
     }
 }
 
-void SHD_init(){
+void SHD_init(void){
     SHD_Memory.pages = g_hash_table_new_full(SHD_ghash_addr, g_direct_equal, NULL, NULL);
     SHD_Memory.global_temps = g_ptr_array_new_full(GLOBAL_POOL_SIZE,NULL);
     SHD_initialize_globals();
@@ -95,11 +97,11 @@ SHD_value SHD_get_shadow(shad_inq inq){
     switch (inq.type){
         case MEMORY:
             shv = get_shadow_memory(inq.addr.vaddr);
-            rval = convert_value(shv,inq.size);
+            shv!=NULL?(rval = convert_value(shv,inq.size)):(rval=0);
             break;
         case FLAG:
             shv = get_flags_shadow(inq.addr.id); //the return value is flag size, cast would not be automatically applied.
-            rval = convert_value(shv,inq.size);
+            shv!=NULL?(rval = convert_value(shv,inq.size)):(rval=0);
             break;
         case GLOBAL:
         case TEMP:
@@ -107,6 +109,7 @@ SHD_value SHD_get_shadow(shad_inq inq){
             shv!=NULL?(rval=(*(SHD_value*)shv)):(rval=0);
             break;
         default:
+            printf("inq.type=%d\n",inq.type);
             assert(0);
     }
     return rval;
@@ -129,17 +132,37 @@ shadow_err set_global_shadow(int id, uint8_t size, void *value){
     return 0;
 }
 
-shadow_err set_memory_shadow(uint64_t vaddr, uint8_t size, void *value){
+shadow_err set_memory_shadow(uint64_t vaddr, uint8_t size, void *value){ //should check the size would not surpass a page
     shadow_page *page = find_shadow_page(vaddr);
     if (page==NULL){
         page = g_new0(shadow_page,1);
-        g_hash_table_insert (SHD_Memory.pages,(gpointer)(vaddr),page);
+        g_hash_table_insert(SHD_Memory.pages,(gpointer)(SHD_KEY_CONVERSION(vaddr)),page);
     }
     memcpy(&(page->bitmap[SHD_find_offset(vaddr)]),value,size);
     return 0;
 }
 
-static shadow_err inline set_flags_shadow(int id, void *value){
+//bulk copy
+shadow_err write_memory_shadow(uint64_t vaddr, uint32_t size, uint8_t value){ //check the size
+    uint64_t page_bound = (vaddr & ~OFFSET_MASK)+PAGE_SIZE;
+
+    if (size + vaddr>page_bound){
+        printf("vaddr=0x%llx, write size=%d exceeds page boundary=0x%llx\n",vaddr,size,page_bound);
+        return 1;
+        //assert(0);
+    }
+    shadow_page *page = find_shadow_page(vaddr);
+    if (page==NULL){
+        page = g_new0(shadow_page,1);
+        g_hash_table_insert (SHD_Memory.pages,(gpointer)(SHD_KEY_CONVERSION(vaddr)),page);
+    }
+//    printf("vaddr_of=0x%llx, write_size=%d\n",SHD_find_offset(vaddr),size);
+    memset(&(page->bitmap[SHD_find_offset(vaddr)]),value,size);
+//    printf("vaddr_of=0x%x, value=0x%x\n",0x800e,page->bitmap[SHD_find_offset(0x800e)]);
+    return 0;
+}
+
+static inline shadow_err set_flags_shadow(int id, void *value){
     SHD_Memory.flags[id] = *((uint8_t*)value);
     return 0;
 }

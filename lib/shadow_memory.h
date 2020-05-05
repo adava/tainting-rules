@@ -3,6 +3,9 @@
 
 #define MAX_NUM_FLAGS 64
 #define TARGET_PAGE_BITS 12
+
+#if !defined(_BITS_STDINT_INTN_H) && !defined(SHADOW_BASIC_INT_TYPES)
+#define SHADOW_BASIC_INT_TYPES
 typedef signed char  int8_t;
 typedef signed short int16_t;
 typedef signed int   int32_t;
@@ -11,6 +14,7 @@ typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
 typedef signed long long   int64_t;
 typedef unsigned long long uint64_t;
+#endif
 
 #define PAGE_SIZE_BITS TARGET_PAGE_BITS
 #define NUM_PAGES_BITS (32 - PAGE_SIZE_BITS)
@@ -19,11 +23,20 @@ typedef unsigned long long uint64_t;
 #define PAGE_MASK  ((1 << NUM_PAGES_BITS) - 1)
 #define SHD_find_offset(vaddr) (uint32_t)(vaddr & OFFSET_MASK)
 #define SHD_PAGE_INDEX(vaddr) (vaddr >> PAGE_SIZE_BITS)
-#define SHD_find_page_addr(vaddr) (SHD_PAGE_INDEX(vaddr) & PAGE_MASK)
-#define SHD_KEY_CONVERSION(addr) ((gconstpointer)addr)
+#define SHD_find_page_addr(vaddr) (vaddr & PAGE_MASK)
+#define SHD_KEY_CONVERSION(addr) ((gconstpointer)SHD_PAGE_INDEX(vaddr))
 
-#define GLOBAL_POOL_SIZE 124 //X86 registers plus a bunch more allocated temps
+#ifndef GLOBAL_POOL_SIZE
+#ifdef X86_REG_ENDING
+#define GLOBAL_POOL_SIZE X86_REG_ENDING + 20 //Capstone has 234 X86 registers, we allocate a few more for temps
+#else
+#define GLOBAL_POOL_SIZE 254
+#endif
+#endif
 
+#define copy_inq(src, dst)  dst.addr.vaddr = src.addr.vaddr;\
+                            dst.type = src.type;\
+                            dst.size = src.size;
 typedef struct shadow_page_struct {
     uint8_t bitmap[PAGE_SIZE]; /* Contains the bitwise tainting data for the page */
 } shadow_page;
@@ -71,7 +84,7 @@ typedef uint64_t SHD_value;
 
 shadow_memory SHD_Memory;
 
-void SHD_init();
+void SHD_init(void);
 
 int SHD_map_reg(int reg_code); //returns internal ID assignment for CPU registers; change to be a MACRO
 
@@ -82,4 +95,5 @@ static uint64_t convert_value(void *value, uint8_t size);
 SHD_value SHD_get_shadow(shad_inq inq); // based on type, it would inquiry shadow_memory. The caller would fetch the proper value based on the size
 shadow_err SHD_set_shadow(shad_inq *inq, void *value); //id for temps would be set by the callee
 
+shadow_err write_memory_shadow(uint64_t vaddr, uint32_t size, uint8_t value);
 #endif
