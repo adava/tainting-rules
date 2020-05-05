@@ -106,7 +106,7 @@ shadow_err SHD_and_or(shad_inq src, shad_inq *dst, uint8_t *src_val, uint8_t *ds
         op1_v = convert_value(src_val,src.size);
         sh_src = SHD_get_shadow(src);
     }
-    if(src.type==IMMEDIATE){
+    if(dst->type==IMMEDIATE){
         sh_dst = 0;
         op2_v = dst->addr.vaddr;
     }
